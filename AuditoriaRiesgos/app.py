@@ -1,6 +1,7 @@
+import os
+import re
 from openai import OpenAI
 from flask import Flask, send_from_directory, request, jsonify, Response
-import re
 
 
 app = Flask(__name__)
@@ -15,10 +16,11 @@ def serve_index():
 def serve_static(path):
     return send_from_directory('dist', path)
 
-client = OpenAI(
-    base_url = 'http://localhost:11434/v1',
-    api_key='ollama', # required, but unused
-)
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "ollama")
+MODEL_NAME      = os.getenv("MODEL_NAME", "ramiro:instruct")
+
+client = OpenAI(base_url=OPENAI_BASE_URL, api_key=OPENAI_API_KEY)
 
 @app.route('/analizar-riesgos', methods=['POST'])
 def analizar_riesgos():
@@ -48,37 +50,64 @@ def sugerir_tratamiento():
     return jsonify({"activo": activo, "riesgo": riesgo, "impacto": impacto, "tratamiento": tratamiento})
 
 
-def obtener_tratamiento( riesgo ):
-    response = client.chat.completions.create(
-    model="ramiro:instruct",
-    messages=[
-    {"role": "system", "content": "Responde en español, eres una herramienta para gestion de riesgos de la iso 27000, el usuario, te ingresara un asset tecnologico, un riesgo y un impacto, tu debes responder con un posible tratamiento en menos de 200 caracteres"},
-    {"role": "user", "content": "mi telefono movil;Acceso no autorizado;un atacante puede acceder a la información personal y confidencial almacenada en el teléfono móvil, como números de teléfono, correos electrónicos y contraseñas"},
-    {"role": "assistant",  "content": "Establecer un bloqueo de la pantalla de inicio que requiera autenticación con contraseña o huella digital" },
-    {"role": "user", "content": riesgo }
-    ]
-    )
-    answer = response.choices[0].message.content
-        
-    return answer
-def obtener_riesgos( activo ):
-    response = client.chat.completions.create(
-    model="ramiro:instruct",
-    messages=[
-    {"role": "system", "content": "Responde en español, eres una herramienta para gestion de riesgos de la iso 27000, el usuario, te ingresara un asset tecnologico y tu responderas con 5 posibles riesgos asociados en bullets."},
-    {"role": "user", "content": "mi raspberry pi"},
-    {"role": "assistant",  "content": """• **Acceso no autorizado**: terceros pueden acceder a la información almacenada o procesada en el Raspberry Pi sin permiso, lo que podría llevar a la revelación de datos confidenciales.
+def obtener_tratamiento(riesgo):
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role":"system","content":"Responde en español..."},
+                {"role":"user","content":riesgo}
+            ]
+        )
+        answer = response.choices[0].message.content
+        if not answer:
+            raise ValueError("Respuesta vacía del modelo")
+        return answer
+    except Exception as e:
+        # fallback simple si no hay modelo local
+        # Elaborar un tratamiento corto basado en texto
+        fallback = "Implementar control de acceso, cifrado y backup periódico; revisar logs y aplicar parcheo."
+        return fallback
 
-• **Pérdida o daño de datos**: los archivos y datos almacenados en el Raspberry Pi se pierden o dañan debido a un error en el sistema, un fallo en el hardware o una acción malintencionada.
-
-• **Vulnerabilidades de seguridad**: El software o firmware instalados en el Raspberry Pi contienen vulnerabilidades de seguridad no detectadas y son explotados por un atacante.
-
-• **Inseguridad de la conexión**: la conexión del Raspberry Pi a la red local o internet no esté segura y un atacante intercepta datos confidenciales o inyecta malware en el sistema.
-
-• **Fallos hardware**: daño debido a causas como sobrecalentamiento, sobrecarga eléctrica o errores en la manufactura, lo que lleva a una pérdida de datos o inoperatividad del sistema.""" },
-    {"role": "user", "content": activo }
-  ]
-)
+def obtener_riesgos(activo):
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role":"system","content":"Responde en español... pide 5 riesgos en bullets"},
+                {"role":"user","content":activo}
+            ]
+        )
+        answer = response.choices[0].message.content
+        # intenta parsear bullets con regex original; si falla, fallback:
+        patron = r'\*\*\s*(.+?)\*\*:\s*(.+?)\.(?=\s*\n|\s*$)'
+        resultados = re.findall(patron, answer)
+        if resultados:
+            riesgos = [r[0] for r in resultados]
+            impactos = [r[1] for r in resultados]
+        else:
+            # fallback: lista simple
+            riesgos = [
+                "Acceso no autorizado",
+                "Pérdida de datos",
+                "Vulnerabilidades de software",
+                "Conexiones inseguras",
+                "Fallo de hardware"
+            ]
+            impactos = [
+                "Revelación de datos",
+                "Pérdida de información crítica",
+                "Exposición a exploits",
+                "Intercepción de datos",
+                "Inoperatividad del servicio"
+            ]
+        return riesgos, impactos
+    except Exception as e:
+        # fallback genérico
+        riesgos = ["Acceso no autorizado", "Pérdida de datos", "Vulnerabilidades", "Conexión insegura", "Fallos hardware"]
+        impactos = ["Divulgación de datos", "Pérdida de servicio", "Compromiso", "Intercepción", "Inoperatividad"]
+        return riesgos, impactos
+    
     answer = response.choices[0].message.content
     patron = r'\*\*\s*(.+?)\*\*:\s*(.+?)\.(?=\s*\n|\s*$)'
     
